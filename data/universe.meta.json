@@ -1,0 +1,9 @@
+{
+  "built_at": "2026-10-17T08:44:47+00:00",
+  "sources": [
+    "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqtraded.txt",
+    "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
+  ],
+  "rows": 4707,
+  "note": "current listings only; not point-in-time; delisted names absent"
+}
