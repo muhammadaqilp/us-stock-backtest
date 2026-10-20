@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "us-swing-screener"
+version = "0.1.0"
+description = "Research-first US stock swing screener and walk-forward backtester using yfinance"
+requires-python = ">=3.11"
+dependencies = [
+  "yfinance>=0.2.54",
+  "pandas>=2.2",
+  "numpy>=1.26",
+  "requests>=2.31",
+  "tabulate>=0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.9"]
+
+[project.scripts]
+swing-screener = "swing_screener.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
