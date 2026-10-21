@@ -185,3 +185,38 @@ def plan_steps(p: dict, s) -> list:
          else f"Size for ${s.initial_capital:,.0f}: {p['sizing_note']}."),
         f"Earnings: {p['event_risk']}",
     ]
+
+
+def plan_at_entry(p: dict, entry: float, s) -> dict:
+    """Recompute stop/target/size from an entry price SUPPLIED BY THE USER (their fill or intended fill), keeping the
+    plan's ATR14. Same risk, cost and sizing rules as the backtest. Does not change the plan's verification status."""
+    if "atr14" not in p or p.get("atr14") is None or "ref_entry" not in p:
+        return {"available": False, "reason": "no ATR/reference available for this ticker (data or indicators incomplete)"}
+    atr, ref = float(p["atr14"]), float(p["ref_entry"])
+    lv = levels(entry, atr, s)
+    if not lv["valid"]:
+        return {"available": False, "reason": f"stop would be at or below zero for entry {entry:g} with ATR {atr:.2f}"}
+    sz = size_position(s.initial_capital, s.initial_capital, entry, lv["stop"], s)
+    gap_atr = (entry - ref) / atr
+    warns = []
+    if abs(entry / ref - 1) > 0.25:
+        warns.append(f"entry {entry:g} is {entry / ref - 1:+.0%} from the reference close {ref:g}: typo, wrong currency or wrong ticker?")
+    if s.max_entry_gap_atr > 0 and entry > ref + s.max_entry_gap_atr * atr:
+        warns.append(f"entry is above the optional max entry price {ref + s.max_entry_gap_atr * atr:.2f} "
+                     f"(max_entry_gap_atr={s.max_entry_gap_atr:g})")
+    if gap_atr > 1.0:
+        warns.append(f"entry is {gap_atr:.1f} ATR above the reference close: you would be buying after a large gap up")
+    if p.get("status") != "SETUP_QUALIFIED":
+        warns.append(f"setup status is {p.get('status')}: this is not a qualified signal")
+    if p.get("earnings_status") in ("IN_HOLDING_WINDOW", "UNKNOWN"):
+        warns.append(f"earnings status {p['earnings_status']}: gap risk, stop may not protect you")
+    return {"available": True, "entry": round(entry, 4), "stop": round(lv["stop"], 4), "target": round(lv["target"], 4),
+            "rr_gross": round(lv["rr_gross"], 2), "rr_net_of_costs": lv["rr_net"],
+            "gap_vs_reference_pct": round((entry / ref - 1) * 100, 2), "gap_atr": round(gap_atr, 2),
+            "shares": sz["shares"], "position_value": round(sz["shares"] * entry, 2),
+            "risk_at_stop_usd": round(sz["shares"] * sz.get("risk_per_share", 0), 2),
+            "est_round_trip_cost_usd": round(sz["shares"] * entry * s.cost_rate * 2, 2),
+            "sizing_note": "" if sz["shares"] else
+            f"0 shares fit the limits (binding limit: {sz['reason']}); risk per share is about "
+            f"${sz.get('risk_per_share', 0):.2f} vs the ${s.initial_capital * s.risk_per_trade:.2f} risk budget; risk is never raised",
+            "warnings": warns}

@@ -18,7 +18,7 @@ from .data import (
 )
 from .events import next_earnings_date, recent_headlines
 from .picks import DISCLAIMER, StaleMarketData, build_daily_picks
-from .plan import build_plan, plan_steps
+from .plan import build_plan, plan_at_entry, plan_steps
 from .screener import PRICE_LABEL
 from .universe import (
     build_universe,
@@ -100,6 +100,30 @@ def _print_news(n, link=None):
     print(f"   Check news yourself: {n['link']}")
 
 
+def _positive_price(text):
+    try:
+        v = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"'{text}' is not a number") from None
+    if not (v > 0 and v < float("inf")):
+        raise argparse.ArgumentTypeError("entry price must be a positive number")
+    return v
+
+
+def _print_at_entry(a):
+    if not a["available"]:
+        print(f"Plan at your entry: unavailable - {a['reason']}"); return
+    print(f"Plan at YOUR entry {a['entry']} (price you supplied; gap vs reference close {a['gap_vs_reference_pct']:+.2f}%, {a['gap_atr']:+.2f} ATR):")
+    print(f"   - Stop {a['stop']}   Target {a['target']}   Reward/risk {a['rr_gross']} gross, {a['rr_net_of_costs']} net of costs")
+    if a["shares"]:
+        print(f"   - Size: {a['shares']} share(s) = ${a['position_value']}, risk at stop about ${a['risk_at_stop_usd']}, "
+              f"est. round-trip cost ${a['est_round_trip_cost_usd']}")
+    else:
+        print(f"   - Size: {a['sizing_note']}")
+    for w in a["warnings"]:
+        print(f"   ! {w}")
+
+
 def _fmt_check(c):
     return f"{'PASS' if c['passed'] else 'FAIL'}  {c['rule']}" + (f"  [{c['value']}]" if c["value"] is not None else "")
 
@@ -112,6 +136,8 @@ def _run_plan(args, s, spy, tickers, frames, reports, outdir):
             plans.append(build_plan(t, frames.get(t), spy.frame, rmap.get(t), s, name=names.get(t, ""),
                                     earnings_lookup=next_earnings_date,
                                     news_lookup=None if args.no_news else recent_headlines))
+            if args.entry is not None and plans[-1]["plan_status"] != "NO_PLAN":
+                plans[-1]["at_entry"] = plan_at_entry(plans[-1], args.entry, s)
     except StaleMarketData as exc:
         print(f"ERROR: {exc}", file=sys.stderr); return 2
     for p in plans:
@@ -135,11 +161,15 @@ def _run_plan(args, s, spy, tickers, frames, reports, outdir):
         print("Plan:")
         for line in plan_steps(p, s) or ["No levels: indicators incomplete."]:
             print("   - " + line)
+        if "at_entry" in p:
+            _print_at_entry(p["at_entry"])
         if p["data_warnings"]:
             print(f"Data warnings: {p['data_warnings']}")
         _print_news(p["news"])
-    flat = [{k: (v if not isinstance(v, (list, dict)) else (";".join(v) if isinstance(v, list) else None)) for k, v in p.items()
-             if k not in ("checklist", "disclaimer")} for p in plans]
+    flat = [{**{k: (v if not isinstance(v, (list, dict)) else (";".join(v) if isinstance(v, list) else None))
+                for k, v in p.items() if k not in ("checklist", "disclaimer", "at_entry", "news")},
+             **{f"at_entry_{k}": (";".join(v) if isinstance(v, list) else v) for k, v in p.get("at_entry", {}).items()}}
+            for p in plans]
     pd.DataFrame(flat).to_csv(outdir / "plan.csv", index=False)
     (outdir / "plan.json").write_text(json.dumps({"disclaimer": DISCLAIMER, "plans": plans}, indent=2, default=str))
     print(f"\n{PRICE_LABEL}\n{DISCLAIMER}\nSaved: {outdir/'plan.csv'}  {outdir/'plan.json'}")
@@ -167,6 +197,8 @@ def main(argv=None, provider=None):
     pl = sub.add_parser("plan", help="Trading plan for the tickers you type (same rules/data checks as scan)")
     pl.add_argument("symbols", nargs="+", help="one or more tickers, e.g. AAPL NVDA (commas also accepted)")
     pl.add_argument("--refresh", action="store_true", help="ignore cache and re-download")
+    pl.add_argument("--entry", type=_positive_price, default=None,
+                    help="your actual or intended entry price (single ticker only): recomputes stop, target, shares and risk")
     pl.add_argument("--no-news", action="store_true", help="skip headline lookup (display-only feature)")
     pl.add_argument("--universe-file", default="data/universe.csv"); pl.add_argument("--output-dir", default=None)
     sub.add_parser("config", help="Print effective configuration")
@@ -182,6 +214,8 @@ def main(argv=None, provider=None):
         print(f"Wrote {len(df)} current-listing tickers to {args.output} (survivorship-biased snapshot)"); return 0
     if args.command == "plan":
         args.tickers = ",".join(args.symbols); args.max_tickers = None
+        if args.entry is not None and len({t.strip().upper() for t in args.tickers.split(",") if t.strip()}) != 1:
+            print("ERROR: --entry applies to exactly one ticker; run plan separately for each.", file=sys.stderr); return 2
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     try:
         spy, tickers, frames, reports = _load(args, s, provider, scan=args.command in ("scan", "plan"))

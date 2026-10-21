@@ -188,3 +188,89 @@ def test_max_entry_price_shown_only_when_filter_enabled():
     assert off["max_entry_price"] == "" and not any("Entry filter" in x for x in plan_steps(off, S(**PS)))
     assert on["max_entry_price"] == pytest.approx(on["ref_entry"] + 0.5 * on["atr14"], abs=1e-3)
     assert any("skip the trade if the open is above" in x for x in plan_steps(on, S(**{**PS, "max_entry_gap_atr": 0.5})))
+
+
+# ---------------------------------------------------------------- plan --entry (user-supplied fill price)
+def test_plan_at_entry_arithmetic_matches_atr_multiples():
+    from swing_screener.plan import plan_at_entry
+    s = S(**{**PS, "initial_capital": 100_000.0})
+    p = plan(uptrend(), s)
+    atr, ref = p["atr14"], p["ref_entry"]
+    a = plan_at_entry(p, ref + 1.0, s)
+    assert a["available"] and a["entry"] == pytest.approx(ref + 1.0, abs=1e-4)
+    assert a["stop"] == pytest.approx(ref + 1.0 - 2 * atr, abs=1e-3) and a["target"] == pytest.approx(ref + 1.0 + 4 * atr, abs=1e-3)
+    assert a["rr_gross"] == 2.0 and a["gap_vs_reference_pct"] == pytest.approx(100 / ref, abs=0.01)
+    assert a["shares"] >= 1 and a["risk_at_stop_usd"] <= 100_000 * s.risk_per_trade + 1e-9   # risk budget respected
+
+
+def test_plan_at_entry_same_price_as_reference_matches_the_plan_levels():
+    from swing_screener.plan import plan_at_entry
+    s = S(**PS)
+    p = plan(uptrend(), s)
+    a = plan_at_entry(p, p["ref_entry"], s)
+    for k in ("stop", "target", "shares", "rr_gross"):
+        assert a[k] == pytest.approx(p[k], abs=1e-3)
+
+
+def test_plan_at_entry_zero_shares_explains_and_never_raises_risk():
+    from swing_screener.plan import plan_at_entry
+    s = S(**PS)                                          # $1,000 capital
+    p = plan(uptrend(price=500.0), s)
+    a = plan_at_entry(p, p["ref_entry"], s)
+    assert a["shares"] == 0 and "risk is never raised" in a["sizing_note"] and "risk budget" in a["sizing_note"]
+
+
+@pytest.mark.parametrize("mult,needle", [(1.6, "typo, wrong currency"), (1.0001, None)])
+def test_plan_at_entry_warns_on_implausible_entry(mult, needle):
+    from swing_screener.plan import plan_at_entry
+    s = S(**PS)
+    p = plan(uptrend(), s)
+    w = " ".join(plan_at_entry(p, p["ref_entry"] * mult, s)["warnings"])
+    assert (needle in w) if needle else ("typo" not in w)
+
+
+def test_plan_at_entry_flags_gap_filter_unqualified_setup_and_earnings():
+    from swing_screener.plan import plan_at_entry
+    s = S(**{**PS, "max_entry_gap_atr": 0.5})
+    p = plan(uptrend(), s, earnings_lookup=lambda t: None)
+    w = " ".join(plan_at_entry(p, p["ref_entry"] + 3 * p["atr14"], s)["warnings"])
+    assert "above the optional max entry price" in w and "large gap up" in w and "earnings status UNKNOWN" in w
+    q = plan(uptrend(drift=0.0, breakout=False), s)
+    assert q["status"] == "NO_SETUP_TODAY" and "ref_entry" in q
+    assert "not a qualified signal" in " ".join(plan_at_entry(q, q["ref_entry"], s)["warnings"])
+
+
+def test_plan_at_entry_unavailable_without_levels_or_with_impossible_stop():
+    from swing_screener.plan import plan_at_entry
+    s = S(**PS)
+    assert not plan_at_entry(plan(uptrend(idx=IDX[:-3])), 100.0, s)["available"]     # DATA_NOT_CURRENT: no ATR
+    p = plan(uptrend(), s)
+    assert not plan_at_entry(p, 0.5 * p["atr14"], s)["available"]                    # stop would be <= 0
+
+
+@pytest.mark.parametrize("bad", ["0", "-5", "abc", "nan", "inf"])
+def test_cli_rejects_invalid_entry_values(tmp_path, bad, capsys):
+    with pytest.raises(SystemExit):
+        main(["--config", _cfg(tmp_path), "plan", "UP", "--entry", bad], provider=None)
+    err = capsys.readouterr().err
+    assert "positive number" in err or "is not a number" in err
+
+
+def test_cli_entry_requires_exactly_one_ticker(tmp_path, capsys):
+    rc = main(["--config", _cfg(tmp_path), "plan", "AAA", "BBB", "--entry", "10"], provider=None)
+    assert rc == 2 and "exactly one ticker" in capsys.readouterr().err
+
+
+def test_cli_plan_with_entry_prints_and_saves_the_entry_plan(tmp_path, monkeypatch, capsys):
+    _patch(monkeypatch)
+    prov = FakeProvider({"SPY": spy_frame(), "UP": uptrend()})
+    out = tmp_path / "o"
+    ref = round(float(uptrend()["Close"].iloc[-1]), 2)
+    rc = main(["--config", _cfg(tmp_path), "plan", "UP", "--entry", str(ref + 1), "--output-dir", str(out)], provider=prov)
+    assert rc == 0
+    text = capsys.readouterr().out
+    assert "Plan at YOUR entry" in text and "price you supplied" in text
+    data = json.loads((out / "plan.json").read_text())["plans"][0]
+    assert data["at_entry"]["available"] and data["at_entry"]["entry"] == pytest.approx(ref + 1)
+    row = pd.read_csv(out / "plan.csv").iloc[0]
+    assert row["at_entry_stop"] == pytest.approx(data["at_entry"]["stop"]) and row["at_entry_shares"] == data["at_entry"]["shares"]
