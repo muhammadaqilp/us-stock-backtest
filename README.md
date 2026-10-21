@@ -21,6 +21,7 @@ swing-screener data     --max-tickers 400               # download + validate, w
 swing-screener scan     --max-tickers 400               # DAILY PICKS: up to 10 candidates (CSV + JSON), latest completed session
 swing-screener backtest --max-tickers 400               # sequential walk-forward (CSV + JSON)
 swing-screener plan AAPL NVDA SU                         # trading plan for tickers YOU type (any stock, qualified or not)
+swing-screener plan HAS --entry 111.50                   # recompute stop/target/shares/risk from YOUR fill price (one ticker)
 # common flags: --refresh (ignore cache), --tickers AAPL,MSFT, --output-dir DIR, --universe-file FILE, --config FILE
 ```
 
@@ -90,6 +91,10 @@ swing-screener plan AAPL NVDA SU          # lower/upper case and commas both fin
 
 Uses the same data validation, completed-bar rule, rules, score, levels, sizing and earnings check as `scan`, for any ticker (it does not have to be in the 400-stock sample). For each ticker it prints: `status` (`SETUP_QUALIFIED`, `SETUP_BELOW_MIN_SCORE`, `NO_SETUP_TODAY`, `DATA_NOT_CURRENT`, `DATA_UNAVAILABLE`), the score, a PASS/FAIL checklist of every rule for all three setups (so you see exactly what is missing), and plan steps (reference entry, stop, target, reward/risk, time exit, position size for $1,000, earnings). Levels for a ticker that does not qualify are labelled **HYPOTHETICAL / NOT A SIGNAL**; if a ticker has no current completed bar or invalid data, no plan is produced. Files: `plan.csv`, `plan.json`, `data_quality.csv`. A test asserts the checklist agrees with the real qualifiers.
 
+### Firm plan from your fill: `plan TICKER --entry PRICE`
+
+After the open you know your real price. `swing-screener plan HAS --entry 111.50` keeps the signal-date ATR14 and recomputes, from *your* price: stop (entry - 2 ATR), target (entry + 4 ATR), gross/net reward-risk, whole-share size under the same 0.5%-risk / 20%-cap / cash limits, and costs. It also prints the gap versus the reference close (in % and ATR) and warnings: implausible price (> 25% from the reference: typo / wrong currency / wrong ticker), buying after a gap above 1 ATR, above the optional max entry price, setup not qualified, earnings unknown or inside the holding window. If the risk budget cannot buy one share it says so and never raises risk. The entry is a number you supply; the tool does not know live prices and does not change the plan's verification status. One ticker per call; results are also in `plan.json` (`at_entry`) and `plan.csv` (`at_entry_*`).
+
 ## Backtest model
 
 Signals use data through the signal-day close; entry is the **next session's open**; indicators are causal (truncation-invariance tested). Per-side cost = 5 bps commission + 10 bps slippage on entry and every exit (including stop/target/time/final liquidation). Sizing: whole shares, min of 0.5% equity risk (risk per share includes costs), 20% equity cap, available cash; max 5 positions, one per ticker; **zero shares ⇒ skip (risk is never raised)**. Exits: open gap through stop/target fills at the open; otherwise stop checked before target (pessimistic when a bar touches both); max 15 sessions ⇒ close. Missing bars are never filled: the last close is carried and counted; a missing entry bar skips the trade. Final session: every open position is liquidated at the close with costs *before* the final equity row, and a ledger invariant (final equity = initial + Σ trade P&L, no open positions) is asserted on every simulation.
@@ -132,4 +137,4 @@ Today's-listings universe (survivorship + look-ahead in membership); sample of 4
 
 ## Tests
 
-`python -m pytest -q` — 124 tests, all on **synthetic** fixtures (`tests/synthetic.py`); they verify mechanics and are not market results. Real-data outputs exist only under `reports/`.
+`python -m pytest -q` — 138 tests, all on **synthetic** fixtures (`tests/synthetic.py`); they verify mechanics and are not market results. Real-data outputs exist only under `reports/`.
