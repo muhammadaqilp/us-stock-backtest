@@ -28,9 +28,9 @@ def flat(n, price=100.0, start="2024-01-02"):
     return frame([(price, price, price, price)] * n, start=start)
 
 
-def signal(date, tickers, atr=2.0, score=80.0, setup="breakout"):
-    rows = [{"ticker": t, "setup": setup, "score": score - i, "signal_date": date.date().isoformat(), "_atr": atr}
-            for i, t in enumerate(tickers)]
+def signal(date, tickers, atr=2.0, score=80.0, setup="breakout", close=None):
+    rows = [{"ticker": t, "setup": setup, "score": score - i, "signal_date": date.date().isoformat(), "_atr": atr,
+             **({} if close is None else {"close": close})} for i, t in enumerate(tickers)]
     return pd.DataFrame(rows)
 
 

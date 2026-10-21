@@ -155,3 +155,13 @@ def test_cli_reports_provider_outage_and_exits_nonzero(tmp_path, capsys, cmd):
     assert rc == 2
     assert "ERROR" in capsys.readouterr().err
     assert not (tmp_path / "out" / "scan.csv").exists()
+
+
+def test_entry_filter_comparison_reported_and_baseline_matches_main_result():
+    prices, spy = universe()
+    res = run_walk_forward(prices, spy, S(**SW))
+    rows = {r["max_entry_gap_atr"]: r for r in res["entry_filter_comparison"]}
+    assert set(rows) == {0.0, 0.25, 0.5, 1.0}
+    assert rows[0.0]["total_return_pct"] == pytest.approx(res["strategy_combined_oos"]["total_return_pct"])
+    assert rows[0.0]["skipped_for_gap"] == 0 and rows[0.25]["skipped_for_gap"] >= rows[1.0]["skipped_for_gap"]
+    assert rows[0.5]["label"].startswith("PRIMARY") and rows[0.25]["label"] == "context only"

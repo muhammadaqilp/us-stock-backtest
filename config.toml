@@ -25,6 +25,8 @@ min_score = 60.0
 top_n = 10                    # max daily picks (a ceiling, never padded)
 atr_stop_multiple = 2.0
 atr_target_multiple = 4.0
+max_entry_gap_atr = 0.0        # 0 = disabled (baseline: buy every next open). k>0: skip if next open > signal close + k*ATR14
+entry_filter_tests = [0.25, 0.5, 1.0]  # compared in the backtest report; 0.5 was fixed in advance as the primary hypothesis
 max_holding_days = 15          # sessions, entry session counts as session 1; stop/target may exit earlier (incl. before 5)
 breakout_lookback = 20
 breakout_volume_multiple = 1.5

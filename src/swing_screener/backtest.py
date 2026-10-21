@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -91,6 +91,11 @@ def simulate(prices: dict, signals: dict, dates: pd.DatetimeIndex, s) -> SimResu
             if bar is None:
                 skipped.append({"date": d, "ticker": t, "reason": "no_bar_on_entry_session"}); continue
             o = bar[0]
+            if s.max_entry_gap_atr > 0:
+                if "close" not in c:
+                    raise ValueError("entry filter needs the signal-day 'close' on each candidate")
+                if o > c["close"] + s.max_entry_gap_atr * c["_atr"]:     # open is too far above the signal close
+                    skipped.append({"date": d, "ticker": t, "reason": "gap_above_max_entry"}); continue
             lv = levels(o, c["_atr"], s)
             if not lv["valid"]:
                 skipped.append({"date": d, "ticker": t, "reason": "invalid_levels"}); continue
@@ -283,6 +288,16 @@ def run_walk_forward(prices: dict, benchmark: pd.DataFrame, s, *, output_dir: st
         sens.append({"cost_multiplier": mult, "per_side_cost_bps": (s.commission_bps_per_side + s.slippage_bps_per_side) * mult,
                      **{k: m.get(k) for k in ("total_return_pct", "max_drawdown_pct", "trades", "profit_factor",
                                               "expectancy_usd_after_costs", "end_equity")}})
+    entry_tests = []
+    for k in (0.0, *s.entry_filter_tests):
+        r = base if k == s.max_entry_gap_atr else simulate(prices, signals, oos_dates, replace(s, max_entry_gap_atr=k))
+        m = compute_metrics(r.trades, r.equity, s.initial_capital)
+        skipped_gap = int((r.skipped.reason == "gap_above_max_entry").sum()) if len(r.skipped) else 0
+        entry_tests.append({"max_entry_gap_atr": k, "label": "baseline: buy every next open" if k == 0 else
+                            ("PRIMARY (fixed in advance)" if k == 0.5 else "context only"),
+                            "skipped_for_gap": skipped_gap,
+                            **{key: m.get(key) for key in ("total_return_pct", "max_drawdown_pct", "trades", "win_rate_pct",
+                                                           "profit_factor", "expectancy_usd_after_costs", "end_equity")}})
     summary = {
         "status": "RESEARCH_ONLY_NOT_VALIDATED",
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -316,9 +331,12 @@ def run_walk_forward(prices: dict, benchmark: pd.DataFrame, s, *, output_dir: st
         win_df.to_csv(out / "windows.csv", index=False)
         pd.DataFrame(sens).to_csv(out / "cost_sensitivity.csv", index=False)
         summary["cost_sensitivity"] = sens
+        summary["entry_filter_comparison"] = entry_tests
+        pd.DataFrame(entry_tests).to_csv(out / "entry_filter.csv", index=False)
         summary["windows"] = json.loads(win_df.to_json(orient="records"))
         (out / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
     else:
+        summary["entry_filter_comparison"] = entry_tests
         summary["cost_sensitivity"] = sens
         summary["windows"] = json.loads(win_df.to_json(orient="records"))
     return summary

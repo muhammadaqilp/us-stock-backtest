@@ -206,3 +206,40 @@ def test_metrics_profit_factor_expectancy_and_drawdown():
     assert m["avg_win_usd"] == 30 and m["avg_loss_usd"] == -10 and m["expectancy_usd_after_costs"] == pytest.approx(10 / 3)
     assert m["max_drawdown_pct"] == pytest.approx((90 / 120 - 1) * 100)
     assert m["total_commission_usd"] == 3 and m["turnover_x_avg_equity"] == pytest.approx(600 / 105)
+
+
+# ---------------------------------------------------------------- optional entry filter (skip big gaps above the signal close)
+def _gap_case(open_px, k=0.5, tickers=("A",), max_positions=5):
+    bars = {t: px({3: (100, 100, 100, 100), 4: (open_px, open_px, open_px, open_px)}) for t in tickers}
+    d = bars[tickers[0]].index
+    sig = {d[3]: signal(d[3], list(tickers), atr=2.0, close=100.0)}
+    return run(bars, sig, S(max_entry_gap_atr=k, max_positions=max_positions))
+
+
+def test_entry_filter_allows_open_at_the_limit_and_skips_above_it():
+    ok = _gap_case(101.0)                                   # limit = 100 + 0.5 * 2 = 101: allowed (not strictly above)
+    assert len(ok.trades) == 1 and ok.trades.iloc[0].entry_price == 101.0
+    no = _gap_case(101.5)
+    assert len(no.trades) == 0 and list(no.skipped.reason) == ["gap_above_max_entry"]
+
+
+def test_entry_filter_disabled_by_default_buys_every_open():
+    assert len(_gap_case(110.0, k=0.0).trades) == 1
+
+
+def test_entry_filter_never_blocks_a_gap_down():
+    assert len(_gap_case(95.0).trades) == 1
+
+
+def test_entry_filter_requires_signal_close_instead_of_silently_passing():
+    a = px({3: (100, 100, 100, 100), 4: (120, 120, 120, 120)})
+    d = a.index
+    with pytest.raises(ValueError):
+        run({"A": a}, {d[3]: signal(d[3], ["A"])}, S(max_entry_gap_atr=0.5))
+
+
+def test_entry_filter_skipped_candidate_does_not_block_a_later_one():
+    bars = {"A": px({3: (100, 100, 100, 100), 4: (110, 110, 110, 110)}), "B": px({3: (100, 100, 100, 100), 4: (100, 100, 100, 100)})}
+    d = bars["A"].index
+    r = run(bars, {d[3]: signal(d[3], ["A", "B"], atr=2.0, close=100.0)}, S(max_entry_gap_atr=0.5, max_positions=1))
+    assert list(r.trades.ticker) == ["B"] and "gap_above_max_entry" in set(r.skipped.reason)

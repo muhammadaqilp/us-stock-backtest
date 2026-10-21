@@ -29,6 +29,8 @@ class Settings:
     atr_stop_multiple: float = 2.0
     atr_target_multiple: float = 4.0
     max_holding_days: int = 15
+    max_entry_gap_atr: float = 0.0          # 0 = disabled; else skip entry if next open > signal close + k*ATR
+    entry_filter_tests: tuple = (0.25, 0.5, 1.0)   # k values compared in the walk-forward report (primary hypothesis: 0.5)
     breakout_lookback: int = 20
     breakout_volume_multiple: float = 1.5
     pullback_ma_window: int = 20
