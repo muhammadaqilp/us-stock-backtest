@@ -25,7 +25,7 @@ swing-screener plan AAPL NVDA SU                         # trading plan for tick
 ```
 
 Outputs go to `reports/<command>_<timestamp>/` (or `--output-dir`): `data_quality.csv`, `scan.csv/json`,
-`trades.csv`, `equity.csv`, `windows.csv`, `cost_sensitivity.csv`, `skipped_entries.csv`, `summary.json`,
+`trades.csv`, `equity.csv`, `windows.csv`, `cost_sensitivity.csv`, `entry_filter.csv`, `skipped_entries.csv`, `summary.json`,
 `universe_snapshot.csv/json` (exact ticker set + sha256 per run). `--max-tickers` draws a seeded random sample
 (`sample_seed`) so it is reproducible and not alphabetically biased.
 
@@ -111,10 +111,25 @@ Cost sensitivity: 2× costs ⇒ −1.86%, 3× ⇒ −4.91% (profit factor 0.98 /
 
 **Conclusion (supported by these numbers only):** no demonstrated edge. The strategy captured ~8% of SPY's return with a smaller drawdown and ~26% average exposure; the small positive result disappears at 2× costs and is within noise for 370 trades. A bull-market, survivorship-biased sample flatters stock-picking results, so the true picture is probably no better. Do not trade these rules.
 
+## Optional entry filter ("do not buy above") - tested, not recommended
+
+Setting `max_entry_gap_atr = k` in `config.toml` (default 0 = off) skips a trade when the next open is above `signal close + k x ATR14`; `scan`/`plan` then print the `max_entry_price`. The walk-forward report compares the baseline against k = 0.25 / 0.5 / 1.0 (`entry_filter.csv`, `summary.json`). **k = 0.5 was fixed as the single primary hypothesis before running**; the others are context only.
+
+Result (`reports/backtest_entryfilter_20261021/`, same data/costs/signals for every row; OOS 2023-10-23 to 2026-10-20, 12 windows; the data had rolled forward 3 days since the 2026-10-17 report, so its baseline differs from the figures above):
+
+| k (ATR) | Return | Max DD | Trades | Profit factor | Expectancy/trade |
+|---|---|---|---|---|---|
+| baseline (off) | +7.22% | -9.02% | 369 | 1.09 | $0.196 |
+| 0.25 | +6.58% | -7.73% | 357 | 1.09 | $0.184 |
+| **0.5 (primary)** | **+4.36%** | -8.21% | 361 | 1.06 | $0.121 |
+| 1.0 | +6.65% | -8.10% | 366 | 1.08 | $0.182 |
+
+SPY buy and hold over the same dates: +82.73%. **Conclusion: no evidence the filter helps.** The pre-registered k = 0.5 returned less than the baseline; the other values are within noise of it (hundreds of trades, ~$0.1-0.2 expectancy) and slightly lower drawdowns are not enough to conclude anything. Choosing the best-looking k now would be tuning on the test period, so none is recommended. `skipped_for_gap` counts skipped candidates (several candidates can compete for each open slot), not lost trades.
+
 ## Limitations
 
 Today's-listings universe (survivorship + look-ahead in membership); sample of 400, not the full listing; Yahoo data can be revised/incomplete; daily bars cannot show intraday order, spreads, partial fills or halts; no earnings filter in the backtest (earnings gaps are inside the results); dividends ignored for both sides; the strategy is long-only with a single 4-year period (one regime); costs are assumptions; $1,000 with whole shares skips many signals (597 zero-share skips). `signals.py` (an old, defective prototype) was removed.
 
 ## Tests
 
-`python -m pytest -q` — 111 tests, all on **synthetic** fixtures (`tests/synthetic.py`); they verify mechanics and are not market results. Real-data outputs exist only under `reports/`.
+`python -m pytest -q` — 124 tests, all on **synthetic** fixtures (`tests/synthetic.py`); they verify mechanics and are not market results. Real-data outputs exist only under `reports/`.
