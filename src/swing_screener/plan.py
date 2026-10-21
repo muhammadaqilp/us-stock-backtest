@@ -134,6 +134,8 @@ def build_plan(ticker, frame, spy, report, s, *, name="", earnings_lookup=None, 
     if complete and lv["valid"]:
         sz = size_position(s.initial_capital, s.initial_capital, float(r["Close"]), lv["stop"], s)
         out.update(ref_entry=round(float(r["Close"]), 4), stop=round(lv["stop"], 4), target=round(lv["target"], 4),
+                   max_entry_price=(round(float(r["Close"]) + s.max_entry_gap_atr * float(r["atr14"]), 4)
+                                    if s.max_entry_gap_atr > 0 else ""),
                    rr_gross=round(lv["rr_gross"], 2), rr_net_of_costs=lv["rr_net"], max_holding_sessions=s.max_holding_days,
                    shares=sz["shares"], position_value=round(sz["shares"] * float(r["Close"]), 2),
                    risk_at_stop_usd=round(sz["shares"] * sz.get("risk_per_share", 0), 2),
@@ -175,6 +177,8 @@ def plan_steps(p: dict, s) -> list:
         f"{lead}Reference entry: signal-date close {p['ref_entry']}. The real entry would be the NEXT session's open (unknown now); "
         f"re-base stop/target on that open using {s.atr_stop_multiple:g} and {s.atr_target_multiple:g} x ATR14 ({p['atr14']:.2f}).",
         f"{lead}Stop / invalidation: {p['stop']}. Target: {p['target']}. Gross reward/risk {p['rr_gross']} (net of costs {p['rr_net_of_costs']}).",
+        *([f"Entry filter (config max_entry_gap_atr={s.max_entry_gap_atr:g}): skip the trade if the open is above {p['max_entry_price']}."]
+          if p.get("max_entry_price") != "" else []),
         f"Time exit: close the position at the end of session {p['max_holding_sessions']} if neither stop nor target was hit.",
         (f"Size for ${s.initial_capital:,.0f}: {p['shares']} share(s) = ${p['position_value']} at the reference price, risking about "
          f"${p['risk_at_stop_usd']} at the stop, est. round-trip cost ${p['est_round_trip_cost_usd']}." if p["shares"]

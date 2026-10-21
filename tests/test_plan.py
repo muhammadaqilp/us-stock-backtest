@@ -180,3 +180,11 @@ def test_news_does_not_change_score_ranking_or_verification():
     p, _ = build_daily_picks(frames, spy_frame(), ok_reports(frames), S(**PS), expected_bar_date=LAST, earnings_lookup=CLEAR,
                              news_lookup=lambda t: recent_headlines(t, fetch=lambda x: []))
     assert p.iloc[0]["news_status"] == "NOT_AVAILABLE" and "/UP/news" in p.iloc[0]["news_link"]
+
+
+def test_max_entry_price_shown_only_when_filter_enabled():
+    off = plan(uptrend())
+    on = plan(uptrend(), S(**{**PS, "max_entry_gap_atr": 0.5}))
+    assert off["max_entry_price"] == "" and not any("Entry filter" in x for x in plan_steps(off, S(**PS)))
+    assert on["max_entry_price"] == pytest.approx(on["ref_entry"] + 0.5 * on["atr14"], abs=1e-3)
+    assert any("skip the trade if the open is above" in x for x in plan_steps(on, S(**{**PS, "max_entry_gap_atr": 0.5})))
