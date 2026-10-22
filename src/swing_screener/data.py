@@ -214,6 +214,20 @@ def validate_ohlcv(frame: pd.DataFrame, ticker: str, *, settings=None, calendar:
     return rep
 
 
+def drop_incomplete_last_bar(frame: pd.DataFrame):
+    """Yahoo sometimes returns the newest session as an unfinished row (e.g. Close missing). Only the LAST row may be
+    dropped, and only for missing OHLCV; the drop is returned as a warning so it is never silent. Missing values
+    anywhere else are left in place and still fail validation."""
+    if frame is None or len(frame) < 2 or not all(c in frame.columns for c in REQUIRED):
+        return frame, ""
+    last = frame.iloc[-1]
+    missing = [c for c in REQUIRED if pd.isna(last[c])]
+    if not missing:
+        return frame, ""
+    return frame.iloc[:-1], (f"INCOMPLETE LATEST BAR DROPPED: {frame.index[-1].date()} had missing {', '.join(missing)} "
+                             f"(Yahoo unfinished row); newest usable bar is {frame.index[-2].date()}")
+
+
 # ------------------------------------------------------------------ cache + retrieval
 @dataclass
 class History:
@@ -276,8 +290,13 @@ def get_history(ticker: str, provider: DataProvider, settings, *, start: pd.Time
     frame = frame.loc[frame.index >= start] if len(frame) else frame
     if end is not None and len(frame):
         frame = frame.loc[frame.index <= end]
+    frame, dropped_note = drop_incomplete_last_bar(frame)
     rep = validate_ohlcv(frame, ticker, settings=settings, calendar=calendar, as_of=as_of,
                          check_stale=check_stale, source=src, retrieved_at=retrieved)
+    if dropped_note:
+        rep.warnings.append(dropped_note)
+        if rep.status == "OK":
+            rep.status = "WARN"
     rep.adjustment = getattr(provider, "adjustment", ADJUSTMENT)
     if rep.adjustment != ADJUSTMENT:
         rep.warnings.append("NOT EXECUTABLE PRICES: dividend-adjusted OHLC; unsuitable for fills/stops/sizing")

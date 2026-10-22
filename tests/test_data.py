@@ -147,3 +147,50 @@ def test_cache_older_than_max_age_is_refetched(tmp_path):
     m = json.loads(mp.read_text()); m["retrieved_at"] = "2020-01-01T00:00:00+00:00"; mp.write_text(json.dumps(m))
     get_history("AAA", p, s, start=start, max_cache_age_hours=12, check_stale=False)
     assert p.calls == 2
+
+
+# ---------------------------------------------------------------- unfinished trailing bar (Yahoo returns Close=NaN for the newest session)
+def _with_nan_last(df, col="Close"):
+    d = df.copy()
+    d.iloc[-1, d.columns.get_loc(col)] = float("nan")
+    return d
+
+
+def test_incomplete_trailing_bar_is_dropped_with_a_visible_warning(tmp_path):
+    from swing_screener.data import drop_incomplete_last_bar
+    df = good()
+    out, note = drop_incomplete_last_bar(_with_nan_last(df))
+    assert len(out) == len(df) - 1 and out.index[-1] == df.index[-2] and "INCOMPLETE LATEST BAR DROPPED" in note and "Close" in note
+    assert drop_incomplete_last_bar(df)[1] == "" and len(drop_incomplete_last_bar(df)[0]) == len(df)
+
+    class P:
+        name = "yfinance"
+
+        def fetch_daily(self, t, a, b):
+            return _with_nan_last(df)
+    h = get_history("X", P(), S(cache_dir=str(tmp_path / "c")), start=df.index[0], check_stale=False)
+    assert h.report.ok and h.report.status == "WARN" and h.report.end == df.index[-2].date().isoformat()
+    assert any("INCOMPLETE LATEST BAR DROPPED" in w for w in h.report.warnings)
+    assert len(h.frame) == len(df) - 1                      # nothing was filled in
+
+
+def test_missing_values_anywhere_else_still_fail_validation(tmp_path):
+    df = good()
+    bad = df.copy()
+    bad.iloc[10, bad.columns.get_loc("Close")] = float("nan")
+
+    class P:
+        name = "yfinance"
+
+        def fetch_daily(self, t, a, b):
+            return bad
+    h = get_history("X", P(), S(cache_dir=str(tmp_path / "c")), start=df.index[0], check_stale=False)
+    assert not h.report.ok and any("missing OHLCV" in e for e in h.report.errors)
+    # a NaN in BOTH the last row and an earlier row: only the last is dropped, the earlier one still fails
+    both = _with_nan_last(bad)
+
+    class Q(P):
+        def fetch_daily(self, t, a, b):
+            return both
+    h2 = get_history("X", Q(), S(cache_dir=str(tmp_path / "c2")), start=df.index[0], check_stale=False)
+    assert not h2.report.ok
