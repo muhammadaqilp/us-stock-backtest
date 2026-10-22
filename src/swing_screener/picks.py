@@ -63,7 +63,7 @@ def build_daily_picks(frames: dict, spy: pd.DataFrame, reports: list, s, *, name
             excluded[classify_report(r)] += 1
     current, rmap = {}, {r.ticker: r for r in reports}
     for t, f in frames.items():
-        f = f.loc[f.index <= expected]
+        f = f.loc[f.index <= market_bar]            # common as-of date = SPY's newest valid bar (RS needs SPY)
         if f.empty or f.index.max() != market_bar:
             excluded["stale_or_missing_latest_bar"] += 1
         elif not (f["Volume"].iloc[-1] > 0):
@@ -87,10 +87,15 @@ def build_daily_picks(frames: dict, spy: pd.DataFrame, reports: list, s, *, name
         picks["rank"] = range(1, len(picks) + 1)
         picks = picks.reset_index(drop=True)
     not_selected = {k: v for k, v in diag.items() if k != "qualified"}
+    lag = int(np.busday_count(market_bar.date(), expected.date()))
+    note = ("" if lag == 0 else f"Newest valid bar is {market_bar.date()} but the latest completed session should be "
+            f"{expected.date()} ({lag} session(s) behind): picks reflect the {market_bar.date()} close. Re-run later after "
+            "Yahoo finalizes the bar, or if that session was a US holiday this is expected.")
     meta = {
         "scan_time_utc": (scan_time or datetime.now(UTC)).isoformat(timespec="seconds"),
         "market_bar_date": market_bar.date().isoformat(),
         "expected_last_completed_session": expected.date().isoformat(),
+        "bar_lag_sessions": lag, "data_note": note,
         "tickers_requested": len(reports),
         "tickers_examined": len(current),
         "tickers_excluded_data": int(sum(excluded.values())),

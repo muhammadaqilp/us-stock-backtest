@@ -274,3 +274,12 @@ def test_cli_plan_with_entry_prints_and_saves_the_entry_plan(tmp_path, monkeypat
     assert data["at_entry"]["available"] and data["at_entry"]["entry"] == pytest.approx(ref + 1)
     row = pd.read_csv(out / "plan.csv").iloc[0]
     assert row["at_entry_stop"] == pytest.approx(data["at_entry"]["stop"]) and row["at_entry_shares"] == data["at_entry"]["shares"]
+
+
+def test_plan_reports_a_data_note_when_the_newest_valid_bar_lags():
+    extra = pd.bdate_range(LAST + pd.Timedelta(days=1), periods=1)[0]
+    s = S(**PS)
+    p = build_plan("UP", uptrend(), spy_frame(), DataReport("UP", status="OK", rows=300), s, expected_bar_date=extra,
+                   earnings_lookup=CLEAR)
+    assert p["status"] == "SETUP_QUALIFIED" and "1 session(s) behind" in p["data_note"] and p["market_bar_date"] == LAST.date().isoformat()
+    assert plan(uptrend())["data_note"] == ""

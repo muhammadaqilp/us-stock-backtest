@@ -95,10 +95,13 @@ def build_plan(ticker, frame, spy, report, s, *, name="", earnings_lookup=None, 
                news_lookup=None) -> dict:
     spy, market_bar, expected = completed_market_bar(spy, s, expected_bar_date)
     mb = market_bar.date().isoformat()
+    lag = int(np.busday_count(market_bar.date(), expected.date()))
+    data_note = "" if lag == 0 else (f"Newest valid bar is {mb} but the latest completed session should be {expected.date()} "
+                                    f"({lag} session(s) behind): this plan reflects the {mb} close.")
     if report is None or not report.ok:
         why = "; ".join(report.errors) if report is not None else "no data report"
         return _unavailable(ticker, name, "DATA_UNAVAILABLE", f"{classify_report(report) if report else 'no_data'}: {why}", mb)
-    f = frame.loc[frame.index <= expected]
+    f = frame.loc[frame.index <= market_bar]
     if f.empty or f.index.max() != market_bar:
         last = "none" if f.empty else f.index.max().date().isoformat()
         return _unavailable(ticker, name, "DATA_NOT_CURRENT", f"latest bar {last} is not the latest completed session {mb}", mb)
@@ -121,7 +124,7 @@ def build_plan(ticker, frame, spy, report, s, *, name="", earnings_lookup=None, 
            "signal_date": mb, "latest_bar_date": mb, "market_bar_date": mb, "checklist": cl,
            "score": score, **{f"score_{k}": v for k, v in comp.items()},
            "min_score_required": s.min_score, "price_label": PRICE_LABEL, "disclaimer": DISCLAIMER,
-           "data_warnings": "; ".join(report.warnings)}
+           "data_warnings": "; ".join(report.warnings), "data_note": data_note}
     for k in ("Close", "sma20", "sma50", "sma200", "ret20", "ret60", "rel_volume", "atr14", "atr_pct", "avg_dollar_vol20"):
         out[{"Close": "close", "avg_dollar_vol20": "avg_dollar_volume20"}.get(k, k)] = None if pd.isna(r[k]) else float(r[k])
     for n in s.rs_lookbacks:

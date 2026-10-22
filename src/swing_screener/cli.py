@@ -66,6 +66,8 @@ def _write_quality(reports, spy_report, out: Path):
 def _print_report(picks, meta):
     print(f"\nDAILY PICKS  scan {meta['scan_time_utc']}  |  market bar date {meta['market_bar_date']}  |  "
           f"examined {meta['tickers_examined']}/{meta['tickers_requested']}  excluded(data) {meta['tickers_excluded_data']}")
+    if meta.get("data_note"):
+        print(f"WARNING: {meta['data_note']}")
     print(f"Data exclusions: {meta['exclusion_reasons_data'] or 'none'}")
     print(f"Examined but not selected: {meta['examined_not_selected_reasons']}")
     print(f"Qualified {meta['tickers_qualified']} tickers; showing {meta['picks_returned']} (max {meta['max_picks']}, min score {meta['min_score']}).")
@@ -144,6 +146,8 @@ def _run_plan(args, s, spy, tickers, frames, reports, outdir):
         print(f"\n{'=' * 78}\n{p['ticker']}  {p.get('company_name') or '(name not in universe file)'}  |  completed bar {p['market_bar_date']}")
         if p["plan_status"] == "NO_PLAN":
             print(f"STATUS: {p['status']} - {p['reasons']}"); continue
+        if p.get("data_note"):
+            print(f"WARNING: {p['data_note']}")
         sc = f"{p['score']:.1f}/100 (min {p['min_score_required']:g})" if p["score"] is not None else "n/a"
         print(f"STATUS: {p['status']}   plan_status: {p['plan_status']}   score: {sc}   close {p['close']:.2f}")
         print(f"Matching setups: {', '.join(p['setups']) or 'none'}")

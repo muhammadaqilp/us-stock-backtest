@@ -248,3 +248,21 @@ def test_verified_only_keeps_only_fully_verified_and_reranks():
 def test_verified_only_can_return_zero():
     p, m = run({"A": uptrend()}, earnings_lookup=lambda t: None, verified_only=True)
     assert p.empty and m["verified_only"] and m["tickers_qualified"] == 1
+
+
+def test_tickers_with_a_newer_bar_than_spy_are_trimmed_to_spys_date_not_excluded():
+    extra = pd.bdate_range(LAST + pd.Timedelta(days=1), periods=1)
+    newer = pd.concat([uptrend(), uptrend().iloc[[-1]].set_axis(extra)])
+    p, m = build_daily_picks({"UP": newer}, spy_frame(), ok_reports(["UP"]), S(**PS), expected_bar_date=extra[0],
+                             earnings_lookup=lambda t: None)
+    assert m["market_bar_date"] == LAST.date().isoformat() and m["exclusion_reasons_data"] == {}
+    assert list(p.ticker) == ["UP"] and (p["latest_bar_date"] == m["market_bar_date"]).all()
+
+
+def test_bar_lag_is_reported_loudly_when_spy_is_one_session_behind():
+    extra = pd.bdate_range(LAST + pd.Timedelta(days=1), periods=1)[0]
+    p, m = build_daily_picks({"UP": uptrend()}, spy_frame(), ok_reports(["UP"]), S(**PS), expected_bar_date=extra,
+                             earnings_lookup=lambda t: None)
+    assert m["bar_lag_sessions"] == 1 and LAST.date().isoformat() in m["data_note"] and "behind" in m["data_note"]
+    _, m0 = run({"UP": uptrend()})
+    assert m0["bar_lag_sessions"] == 0 and m0["data_note"] == ""
