@@ -28,6 +28,7 @@ atr_target_multiple = 4.0
 max_entry_gap_atr = 0.0        # 0 = disabled (baseline: buy every next open). k>0: skip if next open > signal close + k*ATR14
 entry_filter_tests = [0.25, 0.5, 1.0]  # compared in the backtest report; 0.5 was fixed in advance as the primary hypothesis
 max_holding_days = 15          # sessions, entry session counts as session 1; stop/target may exit earlier (incl. before 5)
+breakeven_trigger_atr = 0.0    # 0 = off. k>0: once high >= entry + k*ATR14, stop -> entry plus costs from the next session (pre-registered test B1 uses 1.0)
 breakout_lookback = 20
 breakout_volume_multiple = 1.5
 pullback_ma_window = 20
@@ -40,6 +41,8 @@ rs_min_outperformance = 0.0    # stock return minus SPY return must exceed this 
 rs_high_window = 60
 rs_max_distance_from_high = 0.05
 general_relative_volume = 1.0
+regime_sma = 0                 # 0 = off. N>0: no new entries unless SPY closed above its N-day SMA on the signal day (variant V1)
+enabled_setups = ["breakout", "pullback", "relative_strength"]  # variant V3 drops "relative_strength"
 
 [risk]
 initial_capital = 1000.0

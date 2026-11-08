@@ -14,7 +14,7 @@ from .picks import DISCLAIMER, classify_report, completed_market_bar
 from .risk import levels, size_position
 from .scoring import score_row
 from .screener import PRICE_LABEL, explain_setup
-from .strategies import SETUPS, passes_common_filters
+from .strategies import SETUPS, passes_common_filters, regime_ok
 
 
 def _fin(*v):
@@ -45,6 +45,7 @@ def checklist(r, s) -> dict:
               f(r.get("avg_dollar_vol20"), 0)),
         _rule(f"ATR% between 0 and {s.max_atr_pct:.0%}", _fin(r.get("atr_pct")) and 0 < r["atr_pct"] <= s.max_atr_pct,
               f(r.get("atr_pct"), 4)),
+        *([_rule(f"market regime: SPY close > SPY SMA{s.regime_sma}", regime_ok(r), None)] if s.regime_sma > 0 else []),
     ]
     trend = [_rule("close > SMA50", gt(c, r.get("sma50")), f"{f(c)} vs {f(r.get('sma50'))}"),
              _rule("SMA50 > SMA200", gt(r.get("sma50"), r.get("sma200")), f"{f(r.get('sma50'))} vs {f(r.get('sma200'))}")]
@@ -78,12 +79,12 @@ def checklist(r, s) -> dict:
                   f(r.get("rel_volume"))),
         ],
     }
-    return {"common": common, "uptrend": trend, **setups}
+    return {"common": common, "uptrend": trend, **setups, "enabled_setups": list(s.enabled_setups)}
 
 
 def setups_from_checklist(cl: dict) -> list:
     base = all(x["passed"] for x in cl["common"] + cl["uptrend"])
-    return [k for k in SETUPS if base and all(x["passed"] for x in cl[k])]
+    return [k for k in SETUPS if base and k in cl["enabled_setups"] and all(x["passed"] for x in cl[k])]
 
 
 def _unavailable(ticker, name, status, why, market_bar):
@@ -182,6 +183,9 @@ def plan_steps(p: dict, s) -> list:
         f"{lead}Stop / invalidation: {p['stop']}. Target: {p['target']}. Gross reward/risk {p['rr_gross']} (net of costs {p['rr_net_of_costs']}).",
         *([f"Entry filter (config max_entry_gap_atr={s.max_entry_gap_atr:g}): skip the trade if the open is above {p['max_entry_price']}."]
           if p.get("max_entry_price") != "" else []),
+        *([f"Breakeven stop (config breakeven_trigger_atr={s.breakeven_trigger_atr:g}): once the high reaches entry + "
+           f"{s.breakeven_trigger_atr:g} x ATR14, raise the stop to entry plus costs from the next session."]
+          if s.breakeven_trigger_atr > 0 else []),
         f"Time exit: close the position at the end of session {p['max_holding_sessions']} if neither stop nor target was hit.",
         (f"Size for ${s.initial_capital:,.0f}: {p['shares']} share(s) = ${p['position_value']} at the reference price, risking about "
          f"${p['risk_at_stop_usd']} at the stop, est. round-trip cost ${p['est_round_trip_cost_usd']}." if p["shares"]

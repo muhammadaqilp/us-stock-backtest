@@ -157,7 +157,8 @@ def _run_plan(args, s, spy, tickers, frames, reports, outdir):
         for c in p["checklist"]["common"] + p["checklist"]["uptrend"]:
             print("   " + _fmt_check(c))
         for k in ("breakout", "pullback", "relative_strength"):
-            print(f"Setup '{k}': {'MET' if k in p['setups'] else 'not met'}")
+            state = "MET" if k in p["setups"] else ("disabled in config (enabled_setups)" if k not in s.enabled_setups else "not met")
+            print(f"Setup '{k}': {state}")
             for c in p["checklist"][k]:
                 print("   " + _fmt_check(c))
         if p.get("explanation"):

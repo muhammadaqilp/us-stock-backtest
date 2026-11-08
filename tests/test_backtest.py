@@ -243,3 +243,53 @@ def test_entry_filter_skipped_candidate_does_not_block_a_later_one():
     d = bars["A"].index
     r = run(bars, {d[3]: signal(d[3], ["A", "B"], atr=2.0, close=100.0)}, S(max_entry_gap_atr=0.5, max_positions=1))
     assert list(r.trades.ticker) == ["B"] and "gap_above_max_entry" in set(r.skipped.reason)
+
+
+# ---- breakeven stop (SYNTHETIC). signal(): ATR 2, entry open 100 -> stop 96, target 108, 1-ATR trigger at 102.
+def test_breakeven_off_by_default_keeps_original_stop():
+    a = px({5: (100, 103, 99, 101), 6: (100, 100, 97, 98), 7: (98, 98, 95, 96)})
+    d = a.index
+    t = run({"A": a}, {d[3]: signal(d[3], ["A"])}, S()).trades.iloc[0]
+    assert t.exit_reason == "stop" and t.exit_price == 96 and not t.breakeven_armed
+
+
+def test_breakeven_raises_stop_from_next_session_only():
+    s = S(breakeven_trigger_atr=1.0, commission_bps_per_side=5, slippage_bps_per_side=10)
+    be = 100 * 1.0015 / 0.9985
+    # session 5 high 103 arms it, and the same bar's low 99 must NOT exit at breakeven; session 6 low 97 does.
+    a = px({5: (100, 103, 99, 101), 6: (101, 101, 97, 98)})
+    d = a.index
+    t = run({"A": a}, {d[3]: signal(d[3], ["A"])}, s).trades.iloc[0]
+    assert t.exit_reason == "breakeven_stop" and t.exit_date == d[6].date().isoformat()
+    assert t.exit_price == pytest.approx(be) and t.stop == 96 and t.exit_stop == pytest.approx(be)
+    assert t.pnl == pytest.approx(0, abs=1e-6) and bool(t.breakeven_armed)
+
+
+def test_breakeven_exit_is_not_counted_as_a_win():
+    s = S(breakeven_trigger_atr=1.0, commission_bps_per_side=5, slippage_bps_per_side=10)
+    a = px({5: (100, 103, 99, 101), 6: (101, 101, 97, 98)})
+    d = a.index
+    r = run({"A": a}, {d[3]: signal(d[3], ["A"])}, s)
+    assert compute_metrics(r.trades, r.equity, s.initial_capital)["win_rate_pct"] == 0
+
+
+def test_breakeven_not_armed_below_trigger_and_gap_uses_open():
+    s = S(breakeven_trigger_atr=1.0)
+    a = px({5: (100, 101.9, 99, 101), 6: (100, 100, 97, 98)})     # high 101.9 < 102: never armed
+    d = a.index
+    t = run({"A": a}, {d[3]: signal(d[3], ["A"])}, s).trades.iloc[0]
+    assert t.exit_reason == "time" or (t.exit_reason == "stop" and not t.breakeven_armed)
+    assert not t.breakeven_armed
+    b = px({5: (100, 104, 100, 103), 6: (97, 98, 96.5, 97)})      # armed, then gaps below breakeven
+    t = run({"B": b}, {d[3]: signal(d[3], ["B"])}, s).trades.iloc[0]
+    assert t.exit_reason == "breakeven_stop_gap" and t.exit_price == 97
+
+
+def test_breakeven_does_not_block_target_and_ledger_reconciles():
+    s = S(breakeven_trigger_atr=1.0)
+    a = px({5: (100, 103, 100, 102), 6: (102, 109, 101, 108)})
+    d = a.index
+    r = run({"A": a}, {d[3]: signal(d[3], ["A"])}, s)
+    t = r.trades.iloc[0]
+    assert t.exit_reason == "target" and t.exit_price == 108 and bool(t.breakeven_armed)
+    assert r.equity.equity.iloc[-1] == pytest.approx(s.initial_capital + r.trades.pnl.sum())

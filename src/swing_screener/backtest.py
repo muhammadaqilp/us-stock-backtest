@@ -7,6 +7,9 @@ Timeline per session d (all decisions use information available at that point):
        open <= stop -> exit at the open (gap through stop);   open >= target -> exit at the open (gap through target);
        low <= stop  -> exit at the stop (checked BEFORE the target, so a bar touching both counts as a loss);
        high >= target -> exit at the target;  sessions held >= max_holding_days -> exit at the close.
+     Optional breakeven stop (breakeven_trigger_atr = k > 0): if the bar's high reached entry + k*ATR and the position is
+     still open, the stop is raised to the cost-inclusive breakeven price from the NEXT session (daily bars cannot show
+     whether the high came before the low, so it never applies to the triggering bar). The stop is never lowered.
   3. Positions are marked at the latest known close (no bar => last close is carried and counted as a missing-bar day).
   4. Signals are generated from d's close and scheduled for the next session. Not generated on the final session.
   5. On the final session all open positions are liquidated at the close WITH costs and the final equity row reflects it.
@@ -28,6 +31,9 @@ import pandas as pd
 from .indicators import add_indicators
 from .risk import buy_fill, levels, sell_fill, size_position
 from .screener import rank_candidates
+
+
+WIN_EPS_USD = 1e-6   # a breakeven exit nets ~0; float noise above zero must not count as a win
 
 
 class InsufficientHistory(ValueError):
@@ -70,13 +76,15 @@ def simulate(prices: dict, signals: dict, dates: pd.DatetimeIndex, s) -> SimResu
         trades.append({
             "ticker": t, "setup": pos["setup"], "score": pos["score"], "signal_date": pos["signal_date"],
             "entry_date": pos["entry_date"].date().isoformat(), "entry_price": pos["entry_price"],
-            "entry_fill": pos["entry_fill"], "shares": pos["shares"], "stop": pos["stop"], "target": pos["target"],
+            "entry_fill": pos["entry_fill"], "shares": pos["shares"], "stop": pos["initial_stop"], "exit_stop": pos["stop"],
+            "target": pos["target"],
             "exit_date": date.date().isoformat(), "exit_price": raw_price, "exit_fill": fill, "exit_reason": reason,
             "sessions_held": pos["sessions"], "pnl": pnl, "return_pct": pnl / pos["entry_outlay"] * 100,
             "entry_notional": pos["entry_notional"], "exit_notional": notional,
             "commission_usd": pos["entry_notional"] * comm_rate + notional * comm_rate,
             "slippage_usd": (pos["entry_notional"] + notional) * (rate - comm_rate),
             "ambiguous_bar": bool(extra and extra.get("ambiguous")), "missing_bar_days": pos["missing_bar_days"],
+            "breakeven_armed": pos["breakeven_armed"],
         })
 
     for i, d in enumerate(dates):
@@ -106,9 +114,9 @@ def simulate(prices: dict, signals: dict, dates: pd.DatetimeIndex, s) -> SimResu
             cash -= outlay
             positions[t] = {"setup": c["setup"], "score": c["score"], "signal_date": c["signal_date"],
                             "entry_idx": i, "entry_date": d, "entry_price": o, "entry_fill": sz["buy_fill"],
-                            "shares": sz["shares"], "stop": lv["stop"], "target": lv["target"],
+                            "shares": sz["shares"], "stop": lv["stop"], "initial_stop": lv["stop"], "target": lv["target"],
                             "entry_outlay": outlay, "entry_notional": o * sz["shares"],
-                            "sessions": 1, "missing_bar_days": 0}
+                            "sessions": 1, "missing_bar_days": 0, "atr": c["_atr"], "breakeven_armed": False}
             last_close[t] = o
         # 2. exits
         for t in list(positions):
@@ -120,17 +128,23 @@ def simulate(prices: dict, signals: dict, dates: pd.DatetimeIndex, s) -> SimResu
                 continue
             o, h, l, c = bar
             last_close[t] = c
+            be = "breakeven_" if pos["breakeven_armed"] else ""
             if o <= pos["stop"]:
-                close_position(t, pos, d, o, "stop_gap")
+                close_position(t, pos, d, o, f"{be}stop_gap")
             elif o >= pos["target"]:
                 close_position(t, pos, d, o, "target_gap")
             elif l <= pos["stop"]:
-                close_position(t, pos, d, pos["stop"], "stop", {"ambiguous": h >= pos["target"]})
+                close_position(t, pos, d, pos["stop"], f"{be}stop", {"ambiguous": h >= pos["target"]})
             elif h >= pos["target"]:
                 close_position(t, pos, d, pos["target"], "target")
             elif pos["sessions"] >= s.max_holding_days:
                 close_position(t, pos, d, c, "time")
             else:
+                # Arm after this bar's exit checks, so the raised stop first applies to the next session.
+                if (s.breakeven_trigger_atr > 0 and not pos["breakeven_armed"]
+                        and h >= pos["entry_price"] + s.breakeven_trigger_atr * pos["atr"]):
+                    pos["stop"] = max(pos["stop"], pos["entry_price"] * (1 + rate) / (1 - rate))
+                    pos["breakeven_armed"] = True
                 continue
             del positions[t]
         # 3. mark to market
@@ -189,7 +203,7 @@ def compute_metrics(trades: pd.DataFrame, equity: pd.DataFrame, start_equity: fl
          "trades": len(trades)}
     avg_eq = float(np.mean(eq))
     if len(trades):
-        w, lo = trades[trades.pnl > 0], trades[trades.pnl <= 0]
+        w, lo = trades[trades.pnl > WIN_EPS_USD], trades[trades.pnl <= WIN_EPS_USD]
         gp, gl = float(w.pnl.sum()), float(-lo.pnl.sum())
         m.update({"win_rate_pct": len(w) / len(trades) * 100,
                   "avg_win_usd": float(w.pnl.mean()) if len(w) else 0.0,
@@ -306,7 +320,7 @@ def run_walk_forward(prices: dict, benchmark: pd.DataFrame, s, *, output_dir: st
         "universe_size_used": len(prices),
         "strategy_combined_oos": combined, "spy_buy_and_hold_oos": spy,
         "excess_return_vs_spy_pct_points": combined["total_return_pct"] - spy["total_return_pct"],
-        "by_setup": ({k: {"trades": len(g), "pnl_usd": float(g.pnl.sum()), "win_rate_pct": float((g.pnl > 0).mean() * 100),
+        "by_setup": ({k: {"trades": len(g), "pnl_usd": float(g.pnl.sum()), "win_rate_pct": float((g.pnl > WIN_EPS_USD).mean() * 100),
                           "avg_return_pct": float(g.return_pct.mean())} for k, g in base.trades.groupby("setup")}
                      if len(base.trades) else {}),
         "skipped_entries": base.skipped.reason.str.replace(r"\(.*\)", "", regex=True).value_counts().to_dict()

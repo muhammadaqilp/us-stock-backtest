@@ -26,7 +26,15 @@ def passes_common_filters(r, s) -> tuple[bool, str]:
         return False, "illiquid"
     if not (0 < r["atr_pct"] <= s.max_atr_pct):
         return False, "volatility_filter"
+    if s.regime_sma > 0 and not regime_ok(r):
+        return False, "market_regime"
     return True, ""
+
+
+def regime_ok(r) -> bool:
+    """SPY closed above its regime SMA on this date. Missing/unknown counts as NOT ok (never a silent pass)."""
+    v = r.get("bench_regime_ok", np.nan)
+    return bool(pd.notna(v) and v)
 
 
 def established_uptrend(r) -> bool:
@@ -88,4 +96,4 @@ def qualify_all(r, s) -> list[str]:
     ok, _ = passes_common_filters(r, s)
     if not ok:
         return []
-    return [name for name, fn in QUALIFIERS.items() if fn(r, s)[0]]
+    return [name for name, fn in QUALIFIERS.items() if name in s.enabled_setups and fn(r, s)[0]]

@@ -29,6 +29,7 @@ class Settings:
     atr_stop_multiple: float = 2.0
     atr_target_multiple: float = 4.0
     max_holding_days: int = 15
+    breakeven_trigger_atr: float = 0.0      # 0 = off; else once high >= entry + k*ATR, stop -> breakeven from the NEXT session
     max_entry_gap_atr: float = 0.0          # 0 = disabled; else skip entry if next open > signal close + k*ATR
     entry_filter_tests: tuple = (0.25, 0.5, 1.0)   # k values compared in the walk-forward report (primary hypothesis: 0.5)
     breakout_lookback: int = 20
@@ -43,6 +44,8 @@ class Settings:
     rs_high_window: int = 60
     rs_max_distance_from_high: float = 0.05
     general_relative_volume: float = 1.0
+    regime_sma: int = 0                     # 0 = off; else no new entries unless SPY closed above its N-day SMA on the signal day
+    enabled_setups: tuple = ("breakout", "pullback", "relative_strength")
     # risk
     initial_capital: float = 1000.0
     risk_per_trade: float = 0.005
@@ -83,4 +86,12 @@ def load_settings(path: str | Path = "config.toml") -> Settings:
             if isinstance(val, list):
                 val = tuple(val)
             values[key] = val
-    return Settings(**values)
+    s = Settings(**values)
+    unknown = set(s.enabled_setups) - {"breakout", "pullback", "relative_strength"}
+    if unknown or not s.enabled_setups:
+        raise ValueError(f"config: enabled_setups must be a non-empty subset of breakout/pullback/relative_strength, got {s.enabled_setups}")
+    if s.breakeven_trigger_atr < 0:
+        raise ValueError("config: breakeven_trigger_atr must be >= 0")
+    if s.regime_sma < 0:
+        raise ValueError("config: regime_sma must be >= 0")
+    return s

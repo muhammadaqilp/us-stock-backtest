@@ -44,4 +44,12 @@ def add_indicators(frame: pd.DataFrame, settings, benchmark: pd.DataFrame | None
         else:
             d[f"bench_ret{n}"] = np.nan
             d[f"rs{n}"] = np.nan
+    # Market regime: SPY close above its own N-day SMA (SPY calendar, no ffill). Only computed when the filter is on.
+    if getattr(settings, "regime_sma", 0) > 0:
+        if benchmark is not None and len(benchmark):
+            bc = benchmark["Close"]
+            above = (bc > bc.rolling(settings.regime_sma).mean()).where(bc.rolling(settings.regime_sma).count() == settings.regime_sma)
+            d["bench_regime_ok"] = above.reindex(d.index)
+        else:
+            d["bench_regime_ok"] = np.nan
     return d

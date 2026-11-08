@@ -58,7 +58,7 @@ def rank_candidates(indicators: dict, s, as_of: pd.Timestamp | None = None, dedu
         if not ok:
             count(f"filter:{why_not}")
             continue
-        hits = [n for n in SETUPS if QUALIFIERS[n](r, s)[0]]
+        hits = [n for n in SETUPS if n in s.enabled_setups and QUALIFIERS[n](r, s)[0]]
         if not hits:
             count("no_setup_qualified")
             continue

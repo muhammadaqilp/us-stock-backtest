@@ -131,10 +131,111 @@ Result (`reports/backtest_entryfilter_20261021/`, same data/costs/signals for ev
 
 SPY buy and hold over the same dates: +82.73%. **Conclusion: no evidence the filter helps.** The pre-registered k = 0.5 returned less than the baseline; the other values are within noise of it (hundreds of trades, ~$0.1-0.2 expectancy) and slightly lower drawdowns are not enough to conclude anything. Choosing the best-looking k now would be tuning on the test period, so none is recommended. `skipped_for_gap` counts skipped candidates (several candidates can compete for each open slot), not lost trades.
 
+## Rule variants - pre-registered 2026-11-04, before any holdout run
+
+Goal: a higher win rate only counts if expectancy per trade and profit factor do not get worse. Win rate alone is easy to
+raise (a closer target wins more often but earns less per win), so it is reported but never the deciding number.
+
+Holdout: **2011-01-01 to 2021-11-02** (2-year warm-up, so out-of-sample 2013 to 2021), same seeded 400-ticker sample, same
+costs, separate cache (`data/cache_holdout_2011`). No rule in this project was designed or tuned on this period. It includes
+the 2015-16 drawdown, Q4 2018 and the 2020 crash, so it is not only a bull market. Survivorship bias is worse here than
+in the recent period (today's listings looked back 10+ years).
+
+| Variant | Change (config) | Where the idea came from |
+|---|---|---|
+| V1 regime | `regime_sma = 200`: no new entries unless SPY closed above its 200-day SMA on the signal day | Standard trend-filter idea, not from this project's data |
+| V2 score | `min_score = 75` | Score quartiles in the 2023-26 backtest (so only the holdout can test it) |
+| V3 no RS | `enabled_setups = ["breakout", "pullback"]` | Relative-strength setup lost money 2023-26 (so only the holdout can test it) |
+| **V4 = V1+V2+V3** | **PRIMARY hypothesis** | |
+| T1 target 2 ATR | `atr_target_multiple = 2.0` | **Illustration only**: shows win rate rising without expectancy improving. Never a candidate |
+
+**Decision rule (fixed in advance):** change the defaults to V4 only if, over the holdout, V4 beats the baseline on BOTH
+expectancy per trade (%) and profit factor, has profit factor > 1 at 2x costs, and has at least 100 trades. Otherwise the
+defaults stay as they are. V1-V3 are context; none is adopted on its own result. The 2023-26 period is also reported but
+cannot count as evidence for V2/V3, which were derived from it.
+
+### Result (`reports/variants_20261104/`, reproduce with `python research/run_variants.py`)
+
+Holdout, out-of-sample 2013-01-03 to 2021-11-01, 268 usable tickers (132 had no or too little history that far back).
+SPY buy and hold over the same dates: **+214%**. Expectancy is the mean per-trade return after costs, with a 90% bootstrap interval.
+
+| Variant | Trades | Win rate | Expectancy/trade | Profit factor | PF at 2x costs | Return | Max DD |
+|---|---|---|---|---|---|---|---|
+| baseline | 943 | 46.4% | +0.22% [-0.14, +0.60] | 0.98 | 0.88 | -3.0% | -16.5% |
+| V1 regime | 882 | 47.1% | +0.26% [-0.13, +0.64] | 0.99 | 0.89 | -2.4% | -15.4% |
+| V2 score 75 | 631 | 44.1% | -0.08% [-0.55, +0.36] | 0.92 | 0.84 | -9.6% | -22.1% |
+| V3 no RS | 851 | 47.6% | +0.65% [+0.22, +1.08] | 1.13 | 0.88 | +20.5% | -14.4% |
+| **V4 primary** | 501 | 44.3% | +0.34% [-0.24, +0.92] | 1.04 | **0.80** | +3.3% | -15.4% |
+| T1 target 2 ATR (illustration) | 1244 | **52.9%** | +0.08% [-0.17, +0.34] | 0.99 | 0.86 | -3.1% | -17.2% |
+
+Recent period (2023-11-06 to 2026-11-02, context only; SPY +72%): baseline PF 1.09 / +7.2%; V1 1.11 / +8.2%;
+V2 0.99 / -0.6%; V3 1.10 / +7.1%; V4 1.30 / +14.5% (PF 1.24 at 2x costs); T1 0.87 / -11.3% with a 48.5% win rate.
+
+**Decision (by the rule fixed above): V4 is NOT adopted; defaults are unchanged.** It beat the baseline on expectancy
+and profit factor but failed the cost test (PF 0.80 at 2x costs). Other findings, none adopted:
+- The baseline lost money over 2013-21 (PF 0.98) while SPY tripled. The "no demonstrated edge" conclusion now covers
+  about 12 years and two periods.
+- V2: a higher minimum score made results **worse** in the holdout. The score-quartile pattern seen in 2023-26 did not
+  hold, so there is no evidence the score ranks well.
+- V3: dropping the relative-strength setup was the only change with a 90% interval above zero, and RS was the weakest
+  setup in both periods (holdout -0.05%/trade over 474 trades). It still fails at 2x costs. It is the best-supported
+  next hypothesis for a new pre-registered test on data not yet seen (e.g. forward paper trading), not a proven edge.
+- V1: the SPY 200-day filter changed almost nothing.
+- T1: the closer target produced the highest win rate in both periods and the worst or equal expectancy. Win rate is
+  the wrong number to optimise.
+
+## Breakeven stop - pre-registered 2026-11-04, before any run on its test data
+
+Idea from trade diagnostics on the two periods above (so neither can test it): about 40% of losing trades were up at
+least 1 ATR before falling to the full stop.
+
+Rule `breakeven_trigger_atr = 1.0` (**B1, primary**): once a session's high reaches `entry open + 1.0 x ATR14` (the
+signal-day ATR used for the stop), the stop is raised from the **next** session to the breakeven price
+`entry x (1 + cost) / (1 - cost)`, where a stop exit nets roughly zero after both sides' costs. Daily bars do not show
+whether the high came before the low, so the raised stop never applies to the bar that triggered it. The stop is never
+lowered; gap-through-stop still fills at the open; target and time exits are unchanged.
+
+Secondary hypothesis: **V3** (`enabled_setups = ["breakout", "pullback"]`), whose fresh test this is. Context only:
+B1 + V3 together.
+
+Test data: **2001-01-01 to 2012-12-31** (2-year warm-up, so out-of-sample 2003 to 2012, including 2008), same seeded
+400-ticker sample and costs, separate cache (`data/cache_holdout_2001`). Never used before in this project. Survivorship
+bias is worst here: companies that failed in 2008 are absent.
+
+**Decision rule (same as before, applied to B1 and to V3 separately):** adopt as the default only if, over 2003-2012, it
+beats the baseline on BOTH expectancy per trade (%) and profit factor, has profit factor > 1 at 2x costs, and has at
+least 100 trades. Win rate is reported but does not decide. B1 + V3 is never adopted on its own result.
+
+### Result (`reports/breakeven_20261104/`, reproduce with `python research/run_variants.py --set breakeven --period all`)
+
+Out-of-sample 2003-01-02 to 2012-12-31, 183 usable tickers (217 had no or too little history that far back). SPY buy and
+hold over the same dates: +60%. A breakeven exit nets ~0 after costs and counts as **not** a win.
+
+| Variant | Trades | Win rate | Breakeven exits | Expectancy/trade | Profit factor | PF at 2x costs | Return | Max DD |
+|---|---|---|---|---|---|---|---|---|
+| baseline | 982 | 45.7% | - | +0.09% [-0.27, +0.46] | 0.99 | 0.90 | -2.2% | -23.3% |
+| **B1 breakeven 1 ATR** | 1257 | **25.5%** | 486 | -0.13% [-0.40, +0.15] | **0.89** | 0.79 | -19.8% | -29.2% |
+| **V3 no RS** | 886 | 46.8% | - | +0.25% [-0.12, +0.66] | 1.07 | **0.96** | +12.9% | -19.6% |
+| B1 + V3 (context) | 1054 | 25.0% | 436 | -0.05% [-0.35, +0.26] | 0.91 | 0.79 | -13.0% | -19.3% |
+
+The two already-used periods (context only) agree: B1 lowers win rate to about 26% in both, and lowers profit factor
+in 2013-21 (0.95 vs 0.98). In 2023-26 it is slightly higher (1.12 vs 1.07) but no better at 2x costs. The recent-period run had 347
+usable tickers (367 earlier the same day; some downloads failed), so its baseline differs slightly from the table above.
+
+**Decision (by the rule fixed above): neither is adopted; defaults are unchanged.**
+- **B1 is rejected.** It made expectancy and profit factor worse and cut the win rate roughly in half. Raising the
+  stop to breakeven cuts off trades that dip after +1 ATR and would have recovered: many of the small
+  time-exit winners become ~0 exits, and they are not replaced by enough saved losers.
+- **V3 failed the cost test again** (PF 0.96 at 2x costs). It is now better than the baseline on expectancy and
+  profit factor in all three periods (2003-12, 2013-21, 2023-26), but the improvement is small, its 90% interval
+  includes zero in two of them, and it does not survive doubled costs in either holdout. Consistent but not enough to
+  call an edge.
+- The baseline lost money in 2003-12 as well (PF 0.99). Across about 22 years of tests it has not shown an edge.
+
 ## Limitations
 
 Today's-listings universe (survivorship + look-ahead in membership); sample of 400, not the full listing; Yahoo data can be revised/incomplete; daily bars cannot show intraday order, spreads, partial fills or halts; no earnings filter in the backtest (earnings gaps are inside the results); dividends ignored for both sides; the strategy is long-only with a single 4-year period (one regime); costs are assumptions; $1,000 with whole shares skips many signals (597 zero-share skips). `signals.py` (an old, defective prototype) was removed.
 
 ## Tests
 
-`python -m pytest -q` — 138 tests, all on **synthetic** fixtures (`tests/synthetic.py`); they verify mechanics and are not market results. Real-data outputs exist only under `reports/`.
+`python -m pytest -q` — 158 tests, all on **synthetic** fixtures (`tests/synthetic.py`); they verify mechanics and are not market results. Real-data outputs exist only under `reports/`.
