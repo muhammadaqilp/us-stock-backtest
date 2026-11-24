@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 
 from .indicators import add_indicators
-from .risk import buy_fill, levels, sell_fill, size_position
+from .risk import bar_exit, breakeven_price, buy_fill, levels, sell_fill, size_position
 from .screener import rank_candidates
 
 
@@ -128,22 +128,19 @@ def simulate(prices: dict, signals: dict, dates: pd.DatetimeIndex, s) -> SimResu
                 continue
             o, h, l, c = bar
             last_close[t] = c
-            be = "breakeven_" if pos["breakeven_armed"] else ""
-            if o <= pos["stop"]:
-                close_position(t, pos, d, o, f"{be}stop_gap")
-            elif o >= pos["target"]:
-                close_position(t, pos, d, o, "target_gap")
-            elif l <= pos["stop"]:
-                close_position(t, pos, d, pos["stop"], f"{be}stop", {"ambiguous": h >= pos["target"]})
-            elif h >= pos["target"]:
-                close_position(t, pos, d, pos["target"], "target")
+            hit = bar_exit(o, h, l, pos["stop"], pos["target"])
+            if hit:
+                reason, price, ambiguous = hit
+                if pos["breakeven_armed"] and reason.startswith("stop"):
+                    reason = f"breakeven_{reason}"
+                close_position(t, pos, d, price, reason, {"ambiguous": ambiguous})
             elif pos["sessions"] >= s.max_holding_days:
                 close_position(t, pos, d, c, "time")
             else:
                 # Arm after this bar's exit checks, so the raised stop first applies to the next session.
                 if (s.breakeven_trigger_atr > 0 and not pos["breakeven_armed"]
                         and h >= pos["entry_price"] + s.breakeven_trigger_atr * pos["atr"]):
-                    pos["stop"] = max(pos["stop"], pos["entry_price"] * (1 + rate) / (1 - rate))
+                    pos["stop"] = max(pos["stop"], breakeven_price(pos["entry_price"], rate))
                     pos["breakeven_armed"] = True
                 continue
             del positions[t]

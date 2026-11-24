@@ -1,4 +1,4 @@
-"""Fills, costs, stop/target levels and whole-share position sizing (shared by scan and backtest)."""
+"""Fills, costs, stop/target levels, exit rules and whole-share position sizing (shared by scan, backtest and journal)."""
 import math
 
 
@@ -39,3 +39,22 @@ def size_position(equity: float, cash: float, entry_raw: float, stop_raw: float,
         reason = min((("risk_budget", by_risk), ("position_cap", by_cap), ("cash", by_cash)), key=lambda x: x[1])[0]
     return {"shares": shares, "reason": reason, "buy_fill": bf, "risk_per_share": rps,
             "by_risk": by_risk, "by_cap": by_cap, "by_cash": by_cash}
+
+
+def bar_exit(o: float, h: float, l: float, stop: float, target: float):
+    """Price exit on one daily bar, or None. Order is pessimistic: gap through stop (fill at open), gap through target
+    (fill at open), stop, then target, so a bar touching both counts as a stop. Returns (reason, price, ambiguous)."""
+    if o <= stop:
+        return "stop_gap", o, False
+    if o >= target:
+        return "target_gap", o, False
+    if l <= stop:
+        return "stop", stop, h >= target
+    if h >= target:
+        return "target", target, False
+    return None
+
+
+def breakeven_price(entry: float, rate: float) -> float:
+    """Stop level at which a stop exit nets ~0 after entry and exit costs."""
+    return entry * (1 + rate) / (1 - rate)

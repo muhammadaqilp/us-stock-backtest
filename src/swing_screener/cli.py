@@ -1,5 +1,6 @@
 """Manual CLI. No scheduling, notifications, broker access or order placement exist in this project."""
 import argparse
+import functools
 import json
 import sys
 from datetime import UTC, datetime
@@ -12,11 +13,13 @@ from .config import load_settings
 from .data import (
     DataProviderError,
     YFinanceProvider,
+    expected_last_session,
     get_history,
     load_universe_history,
     reports_to_frame,
 )
 from .events import next_earnings_date, recent_headlines
+from .journal import MIN_TRADES_TO_JUDGE, append_to_journal, compute_outcomes, journal_rows, load_journal, summarize
 from .picks import DISCLAIMER, StaleMarketData, build_daily_picks
 from .plan import build_plan, plan_at_entry, plan_steps
 from .screener import PRICE_LABEL
@@ -181,6 +184,54 @@ def _run_plan(args, s, spy, tickers, frames, reports, outdir):
     return 0
 
 
+def _fmt(v, spec):
+    """Format a number to `spec`; a missing value prints as a right-aligned '-' of the same width."""
+    return format(v, spec) if v is not None else "-".rjust(int(spec.lstrip("+").split(".")[0]))
+
+
+def _run_journal(args, s, provider):
+    j = load_journal(args.dir)
+    if j.empty:
+        print(f"Journal {args.dir}/picks.csv is empty. Record picks after each close with: swing-screener scan --journal")
+        return 0
+    start = min(pd.Timestamp.now().normalize() - pd.DateOffset(years=s.history_years),
+                pd.Timestamp(j["signal_date"].min()) - pd.DateOffset(days=30))
+    age = s.scan_cache_max_age_hours
+    try:
+        spy = get_history("SPY", provider, s, start=start, refresh=args.refresh, max_cache_age_hours=age, check_stale=False)
+    except DataProviderError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr); return 2
+    if not spy.report.ok:
+        print(f"ERROR: SPY benchmark failed validation: {'; '.join(spy.report.errors)}", file=sys.stderr); return 2
+    last = expected_last_session()                       # completed sessions only: never score an unfinished bar
+    calendar = spy.frame.index[spy.frame.index <= last]
+    frames, _ = load_universe_history(sorted(set(j["ticker"])), provider, s, start=start, refresh=args.refresh,
+                                      calendar=spy.frame.index, max_cache_age_hours=age, check_stale=False)
+    frames = {t: f.loc[f.index <= last] for t, f in frames.items()}
+    out = compute_outcomes(j, frames, calendar)
+    stats = summarize(out)
+    d = Path(args.dir)
+    out.to_csv(d / "outcomes.csv", index=False)
+    (d / "report.json").write_text(json.dumps({"as_of_session": calendar[-1].date().isoformat(), "groups": stats}, indent=2))
+    days = j["signal_date"].nunique()
+    print(f"PAPER-TRADING JOURNAL  {len(j)} candidates over {days} scan day(s), "
+          f"{j['signal_date'].min()}..{j['signal_date'].max()}  |  prices through {calendar[-1].date()}")
+    if j["rules_hash"].nunique() > 1:
+        print(f"WARNING: rules changed during the journal ({j['rules_hash'].nunique()} different settings); "
+              "each pick is scored with the exit rules recorded with it, but groups mix rule sets.")
+    print("Each pick is followed on its own (no account, no position limit). R = result / initial risk per share, costs included.\n")
+    print(f"{'group':28s} {'closed':>6s} {'open':>5s} {'wait':>5s} {'win%':>6s} {'avgWin':>7s} {'avgLoss':>8s} "
+          f"{'payoff':>7s} {'needWin%':>9s} {'PF':>6s} {'exp R':>7s}")
+    for g in stats:
+        print(f"{g['group']:28s} {g['closed']:6d} {g['open']:5d} {g['awaiting_entry']:5d} {_fmt(g['win_rate_pct'], '6.1f')} "
+              f"{_fmt(g['avg_win_r'], '+7.2f')} {_fmt(g['avg_loss_r'], '+8.2f')} {_fmt(g['payoff_ratio'], '7.2f')} "
+              f"{_fmt(g['breakeven_win_rate_pct'], '9.1f')} {_fmt(g['profit_factor'], '6.2f')} {_fmt(g['expectancy_r'], '+7.3f')}")
+    print("\nneedWin% = win rate needed to break even at this payoff ratio. A group is only worth judging after "
+          f"{MIN_TRADES_TO_JUDGE}+ closed trades; fewer is mostly luck.")
+    print(f"Saved: {d/'outcomes.csv'}  {d/'report.json'}")
+    return 0
+
+
 def main(argv=None, provider=None):
     ap = argparse.ArgumentParser(prog="swing-screener", description="US stock swing screener / research backtester (manual use)")
     ap.add_argument("--config", default="config.toml")
@@ -199,6 +250,8 @@ def main(argv=None, provider=None):
             p.add_argument("--no-news", action="store_true", help="skip headline lookup (display-only feature)")
             p.add_argument("--verified-only", action="store_true",
                            help="show only picks whose mandatory checks ALL pass (known earnings outside window, data OK, >=1 share)")
+            p.add_argument("--journal", nargs="?", const="journal", default=None, metavar="DIR",
+                           help="also record EVERY qualified candidate in the paper-trading journal (default dir: journal)")
     pl = sub.add_parser("plan", help="Trading plan for the tickers you type (same rules/data checks as scan)")
     pl.add_argument("symbols", nargs="+", help="one or more tickers, e.g. AAPL NVDA (commas also accepted)")
     pl.add_argument("--refresh", action="store_true", help="ignore cache and re-download")
@@ -206,12 +259,17 @@ def main(argv=None, provider=None):
                     help="your actual or intended entry price (single ticker only): recomputes stop, target, shares and risk")
     pl.add_argument("--no-news", action="store_true", help="skip headline lookup (display-only feature)")
     pl.add_argument("--universe-file", default="data/universe.csv"); pl.add_argument("--output-dir", default=None)
+    jr = sub.add_parser("journal", help="Paper-trading report: follow recorded scan picks with the backtest's exit rules")
+    jr.add_argument("--dir", default="journal", help="journal directory (default: journal)")
+    jr.add_argument("--refresh", action="store_true", help="ignore cache and re-download")
     sub.add_parser("config", help="Print effective configuration")
     args = ap.parse_args(argv)
     s = load_settings(args.config)
     provider = provider or YFinanceProvider()
     if args.command == "config":
         print(json.dumps({k: v for k, v in s.__dict__.items()}, indent=2, default=list)); return 0
+    if args.command == "journal":
+        return _run_journal(args, s, provider)
     if args.command == "universe":
         if not args.refresh and Path(args.output).exists():
             print(f"{args.output} exists; use --refresh to rebuild."); return 0
@@ -236,9 +294,10 @@ def main(argv=None, provider=None):
     if not frames:
         print("ERROR: no usable ticker data; nothing to evaluate.", file=sys.stderr); return 2
     if args.command == "scan":
+        earnings = functools.lru_cache(maxsize=None)(next_earnings_date)   # journal pass reuses the same lookups
         try:
             picks, meta = build_daily_picks(frames, spy.frame, reports, s, names=load_names(args.universe_file),
-                                            earnings_lookup=next_earnings_date, top_n=args.top or s.top_n,
+                                            earnings_lookup=earnings, top_n=args.top or s.top_n,
                                             verified_only=args.verified_only,
                                             news_lookup=None if args.no_news else recent_headlines)
         except StaleMarketData as exc:
@@ -247,6 +306,11 @@ def main(argv=None, provider=None):
         (outdir / "scan.json").write_text(json.dumps({"meta": meta, "picks": json.loads(picks.to_json(orient="records"))}, indent=2))
         _print_report(picks, meta)
         print(f"Saved: {outdir/'scan.csv'}  {outdir/'scan.json'}")
+        if args.journal:
+            full, _ = build_daily_picks(frames, spy.frame, reports, s, earnings_lookup=earnings, top_n=10**6,
+                                        scan_time=datetime.fromisoformat(meta["scan_time_utc"]))
+            rows = journal_rows(full, s, meta["scan_time_utc"], top_n=args.top or s.top_n)
+            print("Journal: " + append_to_journal(args.journal, rows, meta["market_bar_date"])[1])
         return 0
     used = sorted(frames)
     info = snapshot(tickers, used, [r.ticker for r in reports if not r.ok], outdir)
