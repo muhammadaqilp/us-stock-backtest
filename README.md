@@ -22,6 +22,8 @@ swing-screener scan     --max-tickers 400               # DAILY PICKS: up to 10 
 swing-screener backtest --max-tickers 400               # sequential walk-forward (CSV + JSON)
 swing-screener plan AAPL NVDA SU                         # trading plan for tickers YOU type (any stock, qualified or not)
 swing-screener plan HAS --entry 111.50                   # recompute stop/target/shares/risk from YOUR fill price (one ticker)
+swing-screener scan --journal                            # also record every qualified candidate for paper trading
+swing-screener journal                                   # paper-trading scorecard for everything recorded so far
 # common flags: --refresh (ignore cache), --tickers AAPL,MSFT, --output-dir DIR, --universe-file FILE, --config FILE
 ```
 
@@ -29,6 +31,31 @@ Outputs go to `reports/<command>_<timestamp>/` (or `--output-dir`): `data_qualit
 `trades.csv`, `equity.csv`, `windows.csv`, `cost_sensitivity.csv`, `entry_filter.csv`, `skipped_entries.csv`, `summary.json`,
 `universe_snapshot.csv/json` (exact ticker set + sha256 per run). `--max-tickers` draws a seeded random sample
 (`sample_seed`) so it is reproducible and not alphabetically biased.
+
+## Paper-trading journal (`scan --journal`, `journal`)
+
+A forward test: the only data nobody can have tuned the rules to. Every period from 2003 to 2026 has already been used
+(see the rule-variant sections below), so new ideas can only be judged honestly here.
+
+```bash
+swing-screener scan --journal            # after each US close: also records EVERY qualified candidate in journal/picks.csv
+swing-screener journal                   # any time: follow every recorded pick and print the scorecard
+```
+
+- **Recording:** all qualified candidates of the scan's market-bar date are saved (not only the top N shown), with their
+  rank, setups, score, plan status, signal close, ATR14 and the exit rules in force. A date already in the journal is
+  never overwritten: the first recording is what you would have acted on. Later config edits never change how an
+  already-recorded pick is scored. Skipping days is fine; the record just has gaps.
+- **Scoring:** each pick is followed with the backtest's own rules (same code): entry at the next session's open, stop
+  and target re-based on that open, gaps fill at the open, stop checked before target, time exit, plus the optional
+  entry filter and breakeven stop if they were on. A test checks that the journal and the backtest give identical exits.
+  Only completed sessions are used; a missing entry bar means no trade, never a filled price.
+- **No account:** each pick is followed on its own, without the $1,000 account, the 5-position limit or share rounding,
+  so the scorecard measures signal quality. Results are in R (result / initial risk per share, costs included).
+- **Scorecard** (`journal/outcomes.csv`, `journal/report.json`), for four groups: what the scan showed (top N),
+  VERIFIED_PLAN picks only, variant V3 (no relative-strength-only picks), and every qualified candidate. Each shows
+  closed/open/waiting counts, win rate, average win and loss in R, payoff ratio, the win rate needed to break even at
+  that payoff, profit factor and expectancy. **Judge a group only after 100+ closed trades.**
 
 ## Data layer and the yfinance MCP — verified findings (2026-10-17)
 
@@ -238,4 +265,4 @@ Today's-listings universe (survivorship + look-ahead in membership); sample of 4
 
 ## Tests
 
-`python -m pytest -q` — 158 tests, all on **synthetic** fixtures (`tests/synthetic.py`); they verify mechanics and are not market results. Real-data outputs exist only under `reports/`.
+`python -m pytest -q` — 170 tests, all on **synthetic** fixtures (`tests/synthetic.py`); they verify mechanics and are not market results. Real-data outputs exist only under `reports/`.
